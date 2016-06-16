@@ -17,12 +17,12 @@ Now, I will use functions defined outside this script to make connections to the
 ```{r,eval=FALSE}
 source("~/cava_r/cava-weather/outsidefunctions.r")
 
-weather_conn = get_connected_weather()
+weather_DB_conn = get_connected_weather()
 query = "select * from weather;"
 results <- dbSendQuery(weather_DB,query)
 weather1 <- fetch(results,n=-1)
 
-aloha_conn = get_connected_aloha()
+sales_conn = get_connected_sales()
 query = "select * from daily_store_sales;"
 results <- dbSendQuery(sales_DB,query)
 sales1 <- fetch(results,n=-1)
