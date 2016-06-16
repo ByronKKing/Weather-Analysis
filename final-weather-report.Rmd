@@ -1,0 +1,254 @@
+---
+title: "newcava"
+output: html_document
+---
+
+#Retreive Data
+  
+First, I will call the necessary libraries.
+
+```{r}
+library("RPostgreSQL")
+library("plyr")
+```
+
+Now, I will use functions defined outside this script to make connections to the weather and aloha databases.  Then I will make a query to retrieve the data.
+
+```{r,eval=FALSE}
+source("~/cava_r/cava-weather/outsidefunctions.r")
+
+weather_conn = get_connected_weather()
+query = "select * from weather;"
+results <- dbSendQuery(weather_DB,query)
+weather1 <- fetch(results,n=-1)
+
+aloha_conn = get_connected_aloha()
+query = "select * from daily_store_sales;"
+results <- dbSendQuery(sales_DB,query)
+sales1 <- fetch(results,n=-1)
+```
+
+Here I preserve the original dataframes, and use the aggregate function on the sales dataframe to sum the total net sales for each date across each store location.
+
+```{r,eval=FALSE}
+salestemp <- sales1
+weathertemp <- weather1
+salestemp1 <- aggregate(salestemp$netsales,list(salestemp$day),sum)
+names(salestemp1)[1] <- "day"
+names(salestemp1)[2] <- "netsales"
+```
+
+#Exploratory Data Analysis
+
+Here I explore the data.  First I check the resulting dataframe and print the footer.  I realize that precipitation is a character string instead of a numeric, so I change it to a numeric variable.
+
+```{r,eval=FALSE,warning=FALSE}
+str(weathertemp)
+tail(weathertemp)
+weathertemp$precipitationin <- as.numeric(weathertemp$precipitationin)
+```
+
+Then I retrieve descriptive statistics for the resulting weather dataframe.  Some insights: the median average daily temperature is 60F, median dew point is 46F, the median daily mean humidity is 61F.  The median cloudcover is 6, and the median wind speed in mph is 8.
+
+```{r}
+summary(weathertemp)
+```
+
+Here, I change the 'date' column to a character string (from a POSICct var type), and create a new 'day' column so that I can join on this date when joining the sales dataframe.
+
+```{r}
+weathertemp$day <- strftime(weathertemp$date,format="%Y-%m-%d")
+```
+
+I now check the resulting sales dataframe:
+  ```{r,eval=FALSE}
+str(salestemp1)
+head(salestemp1)
+```
+And perform summary statistics on sales.  Key insights: the mean daily net sales is $36,610, and the median daily net sales is $28,186.
+```{r}
+summary(salestemp1)
+```
+
+##Joining Dataframes
+
+Now, I left join weather on sales.
+```{r}
+weathersales <- join(salestemp1,weathertemp,type="left",by="day")
+```
+
+
+
+##Missing Data Analysis
+
+Before I start my analysis, I first want to get a sense of what missing values exist in the new dataframe.  I notice that the only missing values exist for max wind gust speed, precipitation, and events.
+```{r}
+sapply(weathersales, function(x) sum(is.na(x)))
+```
+Then, I want to see if they form a pattern that may confound my analysis.  I first load the VIM package.
+```{r,message=FALSE}
+library(VIM)
+```
+The below plot seems to indicate that the missing value pattern is missing at random.
+As mentioned, max gust speed, precipitation, and events have missing variables
+```{r}
+missing<-aggr(weathersales[,20:27],bars=FALSE,combined=TRUE,sortVars=FALSE)
+missing
+```
+
+##Data Visualization
+Now, I plot sales over time.
+```{r}
+library(ggplot2)
+ggplot(data=weathersales, aes(x=day, y=netsales)) +
+  geom_line() +
+  geom_point()+
+  labs(title="Net Sales Over Time",
+       x = "Day",y="Net Sales")
+```
+
+I figure that the plot would be more meaningful if I broke down netsales by day.  Here I make the day of the week and the month their own variables.
+
+```{r}
+library(lubridate)
+weathersales$month <- factor(month(weathersales$date))
+weathersales$dayofweek <- factor(weekdays(weathersales$date))
+```
+And plot the same figure but making the distinction between the different days of the week.
+
+```{r}
+ggplot(data=weathersales, aes(x=day, y=netsales, group=dayofweek, colour=dayofweek)) +
+  geom_line() +
+  geom_point()+
+  labs(title="Net Sales Over Time",
+       x = "Day",y="Net Sales",fill="Day of Week")
+```
+
+
+
+Here, I include only the most recent months in 2016.
+
+
+
+```{r,message=FALSE}
+data2016 <- subset(weathersales,weathersales["day"] > "2015-12-31")
+attach(data2016)
+plot<-qplot(day,netsales, data=data2016
+            ,color=dayofweek,xlab="Day"
+            ,ylab="Daily Net Sales", main="Day of Week and Daily Net Sales")
+plot+ labs(color = "Day of Week")
+```
+
+
+And here, I plot the mean temperature with daily net sales over time.
+
+
+```{r,message=FALSE}
+attach(data2016)
+plot<-qplot(mean_temperaturef,netsales, data=data2016
+            ,color=dayofweek,xlab="Daily Mean Temperature"
+            ,ylab="Daily Net Sales", main="Temperature and Daily Net Sales")
+plot+ labs(color = "Day of Week")
+```
+
+
+
+Finally, I plot the cloud cover with daily net sales over time.
+
+
+```{r,message=FALSE}
+attach(data2016)
+plot<-qplot(cloudcover,netsales, data=data2016
+            ,xlab="Cloud Cover"
+            ,ylab="Daily Net Sales", main="Cloud Cover and Daily Net Sales")
+plot
+```
+
+
+
+There does seem to be a notable positive association between mean temperature and daily net sales in 2016.
+Though there seems to be an association between cloud cover and daily net sales, this probably just has to do with the increased cloud coverage in the first two months of the year.
+
+
+
+
+#Regression Analysis
+##Preliminary Regression Models
+
+I regress netsales on the factors I believe have the greatest influence on daily net sales.
+To capture the positive sloping trend in the data, I create a variable based on the day.  
+```{r,message=FALSE}
+attach(weathersales)
+weathersales$trend <- seq(1:1431)
+#weathersales$holiday <- is.holiday(as.Date(weathersales$date))
+#weathersales$weekend <- factor(is.weekend(as.Date(weathersales$date)))
+weathersales$dayofmonth  <- factor(days(weathersales$date))
+```
+Mean temperature, precipitation, day of the week and month are statistically significant.
+The high R-Square value (~.85) indicates that the model explains well the variation in daily net sales.
+```{r}
+weathersales$precipitationin <- as.numeric(weathersales$precipitationin)
+modelfit <- lm(netsales ~ mean_temperaturef + precipitationin + mean_humidity + dayofweek + month + trend + dayofmonth, data=weathersales)
+summary(modelfit)
+```
+
+I now run another regression model and include different weather variables (mean wind speed and cloudcover).  This model performs worse than the previous model.
+
+```{r}
+model2fit <- lm(netsales ~ dayofweek + month + mean_wind_speedmph + cloudcover + trend, data=weathersales)
+summary(model2fit)
+```
+
+
+##Using Backward Elimination
+Here I subset the dataset to include only weather and variables pertaining to the day, week, or month.
+```{r}
+backwarddata <- subset(weathersales,select=-c(1,3,4,25,26,27))
+```
+
+And then run a regression using backward elimination. This improves the fit of the model (R-squared is ~.867).
+Teh statistically significant explanatory variables include the max dew point, humidity, visibility, cloudcover the day of the week and the month.
+
+The fitted regression coefficients indicate that for every degree increase in the mean humidity, the mean daily net sales decreases by about $2,816.  However, for every degree increase in the maximum and minimum humidity levels, the coefficients indicate that there is an increase in mean net sales of about $1,567 and $1,421 respectively.
+
+For every mile of greater visibility, the regression estimates indicate an increase in $1,579 in mean daily net sales.  This makes intuitive sense in that customers are more likely to go to Cava locations when the weather is clear.  In contrast, for every extra eighth of sky covered in cloud, mean daily net sales decreases by about $8,765.  This notable finding underscores the importance of clear weather on a potential customer's decision to eat out.  Remarkably, the degree of overcast sky is enough to deter potential Cava customers, more so even than daily precipitation.
+
+To address seasonality, I include a qualitative explanatory variable for the month of the year in the model.  The regression coefficients that have the most statistically significant effect are for the summer months.  Interestingly, the months June, July, August, and September are all associated with a mean net sales value that is around $7,000 less than the mean net sales value in January.  The strongest statistically significant effect is in the month of September, where mean net sales is $8,697 less than the estimated mean net sales value in January.
+
+As to be expected, the mean net sales for Friday is highest of all the days of the week, while the mean net sales for Sunday are the lowest.  The estimated coefficients indicate that the mean net sales for Sunday are over $8,000 lower than the mean net sales for Friday, while the mean net sales differs from Saturday's value for Tuesday, Wednesday, and Thursday by $5,425, $3,409, and $4,458, respectively.  There is not statistically significant difference between the mean net sales value for Saturday and Friday
+
+```{r}
+backwardfit <- lm(netsales ~ ., data=backwarddata,direction="backward")
+summary(backwardfit)
+```
+
+##Using Random Forest
+
+Run Random Forest algorithm.  First I must rid of variables containing missing data (i.e. participation).
+While I could create a model to impute these precipitation values, the above regressions reveal that this variable
+is not statistically significant anyway.
+First, I rid of max gust speed mph.
+```{r,message=FALSE}
+rfdata <- backwarddata[,-c(19:20)]
+set.seed(842)
+library(randomForest)
+rand_forest <- randomForest(netsales~., data=rfdata,importance=TRUE, ntree=100)
+```
+
+I now plot variable importance.
+```{r}
+varImpPlot(rand_forest)
+```
+
+Both the Increase in MSE and Node Purity plots suggest humidity, temperature, dewpoint, the month and the day of the week are the most important explanatory variables.
+I make a final regression model with these variables.  However, the model does not outperform the previous regression models.
+
+
+```{r}
+rfvarfit <- lm(netsales ~ month+dayofweek+max_humidity+trend+min_dewpointf+min_temperaturef, data=rfdata)
+summary(rfvarfit)
+```
+
+
+
+
