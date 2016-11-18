@@ -1,0 +1,3 @@
+## Weather Analysis
+
+This is a project I worked on when I worked at Cava. I include Python scripts I used to call the Weather Underground API to retrieve historical weather information as well as 10-day forecast information. I then model netsales with this weather data using regression and the Random Forest algorithm. I ran the analysis in R, so I include here an R Markdown file with the R code and a brief write-up of the analysis.
